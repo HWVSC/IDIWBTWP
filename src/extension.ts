@@ -1,27 +1,87 @@
-// The module 'vscode' contains the VS Code extensibility API
-// Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
 
-// this method is called when your extension is activated
-// your extension is activated the very first time the command is executed
-export function activate(context: vscode.ExtensionContext) {
+//This line needs to be improved
+//Maybe fixing the topic names and creating a interface, but this would decrease the hackability
+function getGlobalStateOrEmptyObject(context: vscode.ExtensionContext): any {
+	let temp: object | undefined = context.globalState.get<object>('idiwbtwo-storage');
+	let storage: object | any = {};
 
-	// Use the console to output diagnostic information (console.log) and errors (console.error)
-	// This line of code will only be executed once when your extension is activated
-	console.log('Congratulations, your extension "idiwbtwp" is now active!');
+	if (temp !== undefined) {
+		storage = temp;
+	}
 
-	// The command has been defined in the package.json file
-	// Now provide the implementation of the command with registerCommand
-	// The commandId parameter must match the command field in package.json
-	let disposable = vscode.commands.registerCommand('idiwbtwp.helloWorld', () => {
-		// The code you place here will be executed every time your command is executed
-
-		// Display a message box to the user
-		vscode.window.showInformationMessage('Hello World from idiwbtwp!');
-	});
-
-	context.subscriptions.push(disposable);
+	return storage;
 }
 
-// this method is called when your extension is deactivated
-export function deactivate() {}
+export function activate(context: vscode.ExtensionContext) {
+
+	context.globalState.update('idiwbtwo-storage', {});
+
+	let api = {
+
+		//This clearly have race conditions, which I'm going to solve by
+		//implementing a retry mechanism in the extension
+		//maybe some day I'll put a lock here
+		subscribe(extensionId: string, topic: string) {
+
+			let storage: object | any = getGlobalStateOrEmptyObject(context);
+
+			if (!(topic in storage)) {
+				storage[topic] = [];
+			}
+
+			if (extensionId in storage[topic]) { return { code: 200, message: 'Extension was already subscribed' }; }
+
+			storage[topic].push(extensionId);
+			context.globalState.update('idiwbtwo-storage', storage);
+
+			return { code: 201, message: 'Extension subscribed with success' };
+
+		},
+		unsubscribe(extensionId: string, topic: string) {
+
+			let storage: object | any = getGlobalStateOrEmptyObject(context);
+
+			if (!(topic in storage)) {
+				return { code: 200, message: 'Extension was already not subscribed' };
+			}
+
+			if (!(extensionId in storage[topic])) { return { code: 200, message: 'Extension was already not subscribed' }; }
+
+			storage[topic] = storage[topic].filter((item: string) => item !== extensionId);
+			context.globalState.update('idiwbtwo-storage', storage);
+
+			return { code: 201, message: 'Extension unsubscribed with success' };
+
+		},
+		sendToTopic(topic: string, thing: object) {
+
+			let storage: object | any = getGlobalStateOrEmptyObject(context);
+
+			if(!(topic in storage)) { return { code: 404, message: "Topic not found"};}
+
+			for(let extensionId of storage[topic]) {
+				let temp = vscode.extensions.getExtension(extensionId);
+				let extension: {recieveMessage: Function};
+
+				if(temp === undefined){
+					this.unsubscribe(extensionId, topic);
+					continue;
+				} else {
+					if(!('recieveMessage' in temp)){
+						this.unsubscribe(extensionId, topic);
+						continue;
+					}
+				}
+				extension = <{recieveMessage: Function}>temp;
+				extension.recieveMessage(topic, thing);
+			}
+
+		}
+	};
+
+	return api;
+
+}
+
+export function deactivate() { }
